@@ -373,12 +373,16 @@ int main(int argc, char *argv[])
     }
 
 
-
+    /*
+     * int runCommand(char* command, int commandLength, int expectedLength, char* dataLabel, bool expectingAck, bool expectingCrc)
+     * */
     if (bArchive) {
       if (runCommand("DMPAFT\n", -1, 0, "archive download initiation", true, false)) {
+
         exit(2);
       }
 
+      printf("Sending time for archive download\n");
       datetimeString[6] = '\n';
       if (runCommand(datetimeString, 6, 6, "archive download initiation", true, true)) {
         exit(2);
@@ -542,18 +546,28 @@ int GetParms(int argc, char *argv[])
                 if (optarg == NULL) {
                   archiveRecords = 0;
                 } else {
-                  // Try and parse a full date time string
-                  if (strptime(optarg, "%Y-%m-%dT%H:%M", archiveTime) == NULL
-                      && strptime(optarg, "%Y-%m-%d", archiveTime) == NULL) {
-                    free(archiveTime);
-                    archiveTime = NULL;
-                    archiveRecords = strtol(optarg, &endptr, 10);
 
-                    if (*endptr != '\0' || endptr == optarg || archiveRecords < 0) {
-                        fprintf(stderr, "vproweather: Illegal date or number of archive records to download specified.\n");
-                        return 0;
-                    }
-                  }
+                	char* lastChar1;
+                	char* lastChar2;
+
+
+                	lastChar1 = strptime(optarg, "%Y-%m-%dT%H:%M", archiveTime);
+                	lastChar2 = strptime(optarg, "%Y-%m-%d", archiveTime);
+
+
+					// Try and parse a full date time string
+					if (lastChar1 == NULL && lastChar2 == NULL) {
+						free(archiveTime);
+						archiveTime = NULL;
+						archiveRecords = strtol(optarg, &endptr, 10);
+
+						if (*endptr != '\0' || endptr == optarg || archiveRecords < 0) {
+							fprintf(stderr, "vproweather: Illegal date or number of archive records to download specified.\n");
+							return 0;
+						}
+					}
+
+
 
                   MakeVantageDatetime(archiveTime, datetimeString);
                   GenerateCRC(4, datetimeString, &datetimeString[4]);
@@ -699,6 +713,54 @@ int ReadToBuffer(int nfd, char *pszBuffer, int nBufSize)
 }
 
 
+/**
+ * Reads up to nBufSize bytes or until no new data arrives for timeout_ms.
+ * Returns number of bytes read, or -1 on error.
+ */
+int ReadToBufferTimeout(int nfd, char *pszBuffer, int nBufSize, int timeout_ms)
+{
+    int nPos = 0;
+
+    while (nPos < nBufSize) {
+        fd_set rfds;
+        struct timeval tv;
+        int ret;
+
+        FD_ZERO(&rfds);
+        FD_SET(nfd, &rfds);
+
+        tv.tv_sec  = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+        /* Wait for data or timeout */
+        ret = select(nfd + 1, &rfds, NULL, NULL, &tv);
+        if (ret < 0) {
+            perror("vproweather: select() failed");
+            return -1;
+        }
+        if (ret == 0) {
+            /* timeout: no more characters within timeout_ms */
+            break;
+        }
+
+        /* Data is available */
+        int nRead = read(nfd, pszBuffer + nPos, nBufSize - nPos);
+        if (nRead < 0) {
+            perror("vproweather: Problem reading serial device.");
+            return -1;
+        }
+        if (nRead == 0) {
+            /* Shouldn't usually happen for a serial fd, but just in case */
+            break;
+        }
+
+        nPos += nRead;
+    }
+
+    return nPos;
+}
+
+
 
 
 /**
@@ -750,7 +812,15 @@ int runCommand(char* command, int commandLength, int expectedLength, char* dataL
         exit(2);
     }
     tcdrain(fdser);
-    nCnt = ReadToBuffer(fdser, szSerBuffer, sizeof(szSerBuffer));
+    //nCnt = ReadToBuffer(fdser, szSerBuffer, sizeof(szSerBuffer));
+
+    /* Wait up to (yDelay * 100 ms) for data to stop arriving */
+    int timeout_ms = yDelay * 100;   /* keep same semantics as your VTIME*/
+    nCnt = ReadToBufferTimeout(fdser, szSerBuffer, sizeof(szSerBuffer), timeout_ms);
+    if (nCnt < 0) {
+        return -1;
+    }
+
 
     if (expectingAck) {
       totalLength = totalLength + 1;
