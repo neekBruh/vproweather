@@ -382,7 +382,9 @@ int main(int argc, char *argv[])
         exit(2);
       }
 
-      printf("Sending time for archive download\n");
+      if (bVerbose) {
+    	  printf("Sending time for archive download\n");
+      }
       datetimeString[6] = '\n';
       if (runCommand(datetimeString, 6, 6, "archive download initiation", true, true)) {
         exit(2);
